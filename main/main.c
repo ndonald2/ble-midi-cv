@@ -19,17 +19,18 @@
 #define DAC_I2C_ADDR 0x60
 #define DAC_VMAX 3.3f
 
-#define NN_V0 24 // C1
+#define NN_V0 36 // C2
 
 static uint8_t last_note;
 static bool note_on = false;
+static uint16_t t_last = 0;
 
 uint16_t nn_to_dac_value(uint8_t nn)
 {
     uint8_t nn_scaled = (nn < NN_V0 ? NN_V0 : nn) - NN_V0;
     float oct_mult = (float)(nn_scaled / (12.0f * DAC_VMAX));
     int value = (int)(oct_mult * 4095.0f);
-    ESP_LOGI(TAG, "Raw nn:%d, Scaled nn:%d, DAC value: %d", nn, nn_scaled, value);
+    ESP_LOGD(TAG, "Raw nn:%d, Scaled nn:%d, DAC value: %d", nn, nn_scaled, value);
     return value > 4095 ? 4095 : value;
 }
 
@@ -100,17 +101,23 @@ void start_console(void)
 void callback_midi_message_received(uint8_t blemidi_port, uint16_t timestamp, uint8_t midi_status, uint8_t *remaining_message, size_t len, size_t continued_sysex_pos)
 {
     ESP_LOGI(TAG, "CALLBACK blemidi_port=%d, timestamp=%d, midi_status=0x%02x, len=%d, continued_sysex_pos=%d, remaining_message:", blemidi_port, timestamp, midi_status, len, continued_sysex_pos);
+
     uint8_t code = midi_status >> 4;
     // uint8_t channel = midi_status & 0x0F;
     if (code == 0x09) // note on, ignore channel
     {
+        uint16_t t = timestamp;
+        if (t < t_last) t += (1 << 13);
+        ESP_LOGI(TAG, "Delta t: %d", t - t_last);
+        t_last = timestamp;
+
         last_note = remaining_message[0];
         if (note_on)
         {
             // gate off, update CV, gate on
             gpio_set_level(GATE_PIN, 0);
             i2c_dac_write(nn_to_dac_value(last_note));
-            vTaskDelay(pdMS_TO_TICKS(1));
+            // vTaskDelay(pdMS_TO_TICKS(1));
             gpio_set_level(GATE_PIN, 1);
         }
         else
@@ -134,7 +141,6 @@ void callback_midi_message_received(uint8_t blemidi_port, uint16_t timestamp, ui
 
 void app_main(void)
 {
-//    esp_log_level_set(TAG, ESP_LOG_INFO);
 //    setup_console();
 
     int status = blemidi_init(callback_midi_message_received);
